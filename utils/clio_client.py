@@ -142,14 +142,19 @@ class ClioApiClient:
     def get_matters(
         self,
         group_id,
+        practice_area_id,
+        ids=None,
         updated_since=None,
     ):
         params = {
             "group_id": group_id,
+            "practice_area_id": practice_area_id,
             "fields": "id,etag,updated_at,custom_field_values{id,etag,field_name,value}",
         }
         if updated_since:
             params["updated_since"] = updated_since
+        if ids:
+            params["ids"] = ids
         url = os.path.join(
             self.api_url,
             "matters",
@@ -158,7 +163,9 @@ class ClioApiClient:
 
     def get_matter_by_id(self, id):
         url = os.path.join(self.api_url, "matters", str(id))
-        return self.oauth.client.get(url, params={"fields": "updated_at"})
+        return self.oauth.client.get(
+            url, params={"fields": "id,custom_field_values{id,field_name},updated_at"}
+        )
 
     def create_matter(
         self, description, client_id, group_id, practice_area_id, custom_field_values=[]
@@ -187,21 +194,31 @@ class ClioApiClient:
     def get_custom_fields(self, name):
         url = os.path.join(self.api_url, "custom_fields")
         return self.oauth.client.get(
-            url, params={"query": name, "parent_type": "Matter"} if name else None
+            url,
+            params={
+                "query": name,
+                "parent_type": "Matter",
+                "fields": "id,name,field_type,picklist_options{id,option}",
+            }
+            if name
+            else None,
         )
 
-    def create_custom_fields(self, name, field_type="text_line", displayed="true"):
+    def create_custom_fields(
+        self, name, field_type="text_line", displayed="true", pick_list_options=[]
+    ):
         url = os.path.join(self.api_url, "custom_fields")
+        data = {
+            "name": name,
+            "field_type": field_type,
+            "parent_type": "Matter",
+            "displayed": displayed,
+        }
+        if pick_list_options:
+            data["picklist_options"] = pick_list_options
         return self.oauth.client.post(
             url,
-            json={
-                "data": {
-                    "name": name,
-                    "field_type": field_type,
-                    "parent_type": "Matter",
-                    "displayed": displayed,
-                }
-            },
+            json={"data": data},
         )
 
     def get_custom_field(self, id):
@@ -224,32 +241,6 @@ class ClioApiClient:
     def create_practice_area(self, name=None, code=None):
         url = os.path.join(self.api_url, "practice_areas")
         return self.oauth.client.post(url, json={"data": {"name": name, "code": code}})
-
-    def get_notes(self, matter_id, updated_since=None):
-        url = os.path.join(self.api_url, "notes")
-        return self.oauth.client.get(
-            url,
-            params={
-                "matter_id": matter_id,
-                "type": "Matter",
-                "updated_since": updated_since,
-                "fields": "id,etag,detail",
-            },
-        )
-
-    def create_note(self, matter_id, detail, subject=None):
-        url = os.path.join(self.api_url, "notes")
-        return self.oauth.client.post(
-            url,
-            json={
-                "data": {
-                    "matter": {"id": matter_id},
-                    "detail": detail,
-                    "subject": subject,
-                    "type": "Matter",
-                }
-            },
-        )
 
     def get_document_by_id(self, id):
         url = os.path.join(self.api_url, "documents", str(id))
@@ -317,6 +308,64 @@ class ClioApiClient:
     def create_group(self, name):
         url = os.path.join(self.api_url, "groups")
         return self.oauth.client.post(url, json={"data": {"name": name}})
+
+    def get_calendars(self):
+        url = os.path.join(self.api_url, "calendars")
+        params = {"fields": "id,name"}
+        return self.oauth.client.get(url, params=params)
+
+    def create_calendar(self, name):
+        url = os.path.join(self.api_url, "calendars")
+        return self.oauth.client.post(
+            url, json={"data": {"name": name, "visible": True}}
+        )
+
+    def get_calendar_entries(self, calendar_id, updated_since=None, _from=None):
+        url = os.path.join(self.api_url, "calendar_entries")
+        params = {
+            "calendar_id": calendar_id,
+            "fields": "matter,summary,description,start_at,created_at,updated_at",
+            "created_since": updated_since,
+        }
+        if _from:
+            params["from"] = _from
+        return self.oauth.client.get(url, params=params)
+
+    def create_calendar_entry(
+        self, name, description, start, end, calendar_id, matter_id
+    ):
+        url = os.path.join(self.api_url, "calendar_entries")
+        return self.oauth.client.post(
+            url,
+            json={
+                "data": {
+                    "summary": name,
+                    "description": description,
+                    "start_at": start,
+                    "end_at": end,
+                    "calendar_owner": {"id": calendar_id},
+                    "matter": {"id": matter_id},
+                }
+            },
+        )
+
+    def create_calendar_entry(
+        self, name, description, start, end, calendar_id, matter_id
+    ):
+        url = os.path.join(self.api_url, "calendar_entries")
+        return self.oauth.client.post(
+            url,
+            json={
+                "data": {
+                    "summary": name,
+                    "description": description,
+                    "start_at": start,
+                    "end_at": end,
+                    "calendar_owner": {"id": calendar_id},
+                    "matter": {"id": matter_id},
+                }
+            },
+        )
 
     @take_one
     def get_contact(self, name=None):

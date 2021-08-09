@@ -11,9 +11,9 @@ parser.add_argument("--max_records", type=int,
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    now = datetime.datetime.utcnow().isoformat()
     data_bridge = DataBridge()
-    data_bridge.pull_gis_updates(args.max_records)
+    data_bridge.gis_to_clio_migration(max_records=args.max_records)
     data_bridge.push_gis_updates(migrate=True)
+    now = (datetime.datetime.utcnow() + datetime.timedelta(seconds=1)).isoformat()
     with open(data_bridge.clio_update_log_path, "w") as f:
         f.write(now)

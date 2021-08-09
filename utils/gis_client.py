@@ -6,7 +6,8 @@ import requests
 from requests.models import Response
 
 from utils.constants import (
-    GISFields,
+    GISActiveLitigationsFields,
+    GISLitigationHistoryFields,
     GIS_HOST,
     GIS_FEATURE_SERVER_PATH,
     GIS_ACTIVE_LITIGATION_TABLE_ID,
@@ -18,11 +19,11 @@ from utils.logging import logger
 
 def handle_api_response(res: Response):
     if res.status_code != 200:
-        logger.info("Non 200 status code for gis request {res}")
+        logger.info(f"Non 200 status code for gis request {res}")
     else:
         content = res.json()
         if content.get("features") is not None:
-            return content["features"]
+            return content
         else:
             logger.info("Unexpected response body for gis request {content}")
     raise Exception
@@ -41,7 +42,7 @@ class GISClient:
         self.active_litigation_table_id = active_litigation_table_id
         self.litigation_history_table_id = litigation_history_table_id
 
-    def build_query_url(self, table_id, query_params: Dict = {}):
+    def build_query_url(self, table_id, query_params: Dict = {}, query_path = "query"):
         default_query_params = {
             "f": "pjson",
             "returnGeometry": "true",
@@ -49,41 +50,36 @@ class GISClient:
         params = {**query_params, **default_query_params}
         query_string = urllib.parse.urlencode(params)
         url = (
-            os.path.join(self.host, self.feature_server_path, str(table_id), "query")
+            os.path.join(self.host, self.feature_server_path, str(table_id), query_path)
             + "?"
             + query_string
         )
         return url
 
-    def build_where_clause(self, field, query_start_datetime=None):
-        return (
-            f"&where={field} > {query_start_datetime}" if query_start_datetime else ""
-        )
-
     def get_active_litigations(
         self,
         query_start_datetime=None,
         fields=[
-            GISFields.OBJECT_ID.value,
+            GISActiveLitigationsFields.OBJECT_ID.value,
             ## sr number
-            GISFields.INCIDENT_NUMBER.value,
-            GISFields.PARCEL_ID.value,
-            GISFields.CITY_FILE_NO.value,
+            GISActiveLitigationsFields.INCIDENT_NUMBER.value,
+            GISActiveLitigationsFields.PARCEL_ID.value,
+            GISActiveLitigationsFields.CITY_FILE_NO.value,
             ## subdistrict
-            GISFields.SUB_DISTRICT.value,
-            GISFields.NPA_INSPECT_SUMMARY.value,
-            GISFields.CIVIL_WARRANT.value,
+            GISActiveLitigationsFields.SUB_DISTRICT.value,
+            GISActiveLitigationsFields.NPA_INSPECT_SUMMARY.value,
+            GISActiveLitigationsFields.CIVIL_WARRANT.value,
             ## location
-            GISFields.LOCATION.value,
-            GISFields.NEXT_COURT_DATE.value,
+            GISActiveLitigationsFields.LOCATION.value,
+            GISActiveLitigationsFields.NEXT_COURT_DATE.value,
             ## property owner
-            GISFields.PROPERTY_OWNER.value,
+            GISActiveLitigationsFields.PROPERTY_OWNER.value,
             ## defendent
-            GISFields.DEFENDENT.value,
-            GISFields.COURT_STATUS.value,
-            GISFields.LATEST_COURT_NOTES.value,
-            GISFields.CREATION_DATE.value,
-            GISFields.LAST_MODIFIED_DATE.value,
+            GISActiveLitigationsFields.DEFENDENT.value,
+            GISActiveLitigationsFields.COURT_STATUS.value,
+            GISActiveLitigationsFields.LATEST_COURT_NOTES.value,
+            GISActiveLitigationsFields.CREATION_DATE.value,
+            GISActiveLitigationsFields.LAST_MODIFIED_DATE.value,
         ],
     ):
         """ """
@@ -97,21 +93,17 @@ class GISClient:
         res = requests.get(url)
         return handle_api_response(res)
 
-    def get_litigation_history(
+    def get_dismissed_statuses(
         self,
-        query_start_datetime=None,
         fields=[
-            GISFields.OBJECT_ID.value,
-            GISFields.INCIDENT_NUMBER.value,
-            GISFields.CIVIL_WARRANT.value,
-            GISFields.COURT_NOTES.value,
-            GISFields.NEXT_COURT_DATE.value,
+            GISLitigationHistoryFields.CIVIL_WARRANT.value,
+            GISLitigationHistoryFields.DISMISS_STATUS.value,
+            GISLitigationHistoryFields.DISMISSED_CONDITION.value,
+            GISLitigationHistoryFields.NEXT_COURT_DATE.value,
         ],
     ):
         query_params = {
-            "where": f"last_edited_date > '{query_start_datetime}'"
-            if query_start_datetime
-            else "",
+            "where": "DismissStatus IS NOT NULL OR DismissedCondition IS NOT NULL",
             "outFields": ",".join(fields),
         }
         url = self.build_query_url(self.litigation_history_table_id, query_params)
@@ -142,11 +134,11 @@ class GISClient:
         )
         return requests.get(url).content
 
-    def update_features(self, features):
+    def add_litigation_history(self, features):
         url = os.path.join(
             self.host,
             self.feature_server_path,
-            self.active_litigation_table_id,
-            "updateFeatures"
+            self.litigation_history_table_id,
+            "addFeatures"
         )
         return requests.post(url, params={"f": "json", "features": json.dumps(features)})

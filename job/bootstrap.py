@@ -1,6 +1,7 @@
 from utils.clio_client import ClioApiClient
 from utils.data_bridge import DataBridge
 from utils.constants import (
+    CLIO_CALENDAR_NAME,
     CLIO_CLIENT_NAME,
     CLIO_CUSTOM_FIELDS,
     CLIO_GROUP_NAME,
@@ -71,14 +72,39 @@ if __name__ == "__main__":
                 logger.info(
                     f"Custom field {field} not found. Creating new custom field."
                 )
-                custom_field = api_client.create_custom_fields(
+                custom_field_res = api_client.create_custom_fields(
                     name=field["name"],
                     field_type=field["field_type"],
                     displayed=field.get("displayed"),
-                ).json()["data"]
+                    pick_list_options=field.get("picklist_options"),
+                )
+                custom_field = custom_field_res.json()["data"]
                 custom_field["name"] = field["name"]
             entity.append(custom_field)
         logger.info(
             f"Saving Clio custom fields to {data_bridge.custom_fields_path}: {entity}"
         )
         data_bridge.save_entity(data_bridge.custom_fields_path, entity, "custom_fields")
+
+    if data_bridge.clio_calendar is None:
+        logger.info("Loading Clio calendar")
+        calendars_json = api_client.get_calendars().json()
+        calendar = None
+        if calendars_json and calendars_json["data"]:
+            calendars = [
+                cal
+                for cal in calendars_json["data"]
+                if cal["name"] == CLIO_CALENDAR_NAME
+            ]
+            if calendars:
+                calendar = calendars[0]
+        if calendar is None:
+            logger.info(
+                f"Clio calendar {CLIO_CALENDAR_NAME} not found. Creating new calendar."
+            )
+            res = api_client.create_calendar(name=CLIO_CALENDAR_NAME)
+            calendar = res.json()["data"]
+        logger.info(
+            f"Saving Clio calendar to {data_bridge.clio_calendar_path}: {calendar}"
+        )
+        data_bridge.save_entity(data_bridge.clio_calendar_path, calendar, "calendar")

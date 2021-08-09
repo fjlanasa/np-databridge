@@ -7,7 +7,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--migrate", type=bool,
-                    help="maximum number of records to pull", default=False, required=False)
+                    help="migration?", default=False, required=False)
 
 
 if __name__ == "__main__":

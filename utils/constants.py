@@ -1,10 +1,12 @@
 import os
 from enum import Enum
 
-BASE_DATA_DIR = os.environ.get("BASE_DATA_DIR", os.path.expanduser("~/dev/np-databridge/data"))
+BASE_DATA_DIR = os.environ.get(
+    "BASE_DATA_DIR", os.path.expanduser("~/dev/np-databridge/data")
+)
 
 
-class GISFields(Enum):
+class GISActiveLitigationsFields(Enum):
     OBJECT_ID = "OBJECTID"
     LAST_EDITED_DATE = "LAST_EDITED_DATE"
     LAST_MODIFIED_DATE = "LAST_MODIFIED_DATE"
@@ -25,6 +27,20 @@ class GISFields(Enum):
     LITIGATION_HISTORY_INCIDENT_NUMBER = "Incident_Number"
 
 
+class GISLitigationHistoryFields(Enum):
+    OBJECT_ID = "OBJECTID"
+    COURT_STATUS = "Status_1"
+    SUB_DISTRICT = "CouncilDistrict"
+    COURT_NOTES = "CourtNotes"
+    DISMISS_STATUS = "DismissStatus"
+    DISMISSED_CONDITION = "DismissedCondition"
+    NEXT_COURT_DATE = "NextSetting"
+    CIVIL_WARRANT = "CivilWarrant"
+    ADDRESS = "Address"
+    PARCEL_ID = "ParcelID"
+    INCIDENT_NUMBER = "Incident_Number"
+
+
 class ClioCustomFieldNames(Enum):
     INCIDENT_NUMBER = "Incident Number"
     PARCEL_ID = "Parcel ID"
@@ -41,11 +57,15 @@ class ClioCustomFieldNames(Enum):
     LONGITUDE = "GIS Latitude"
     LATITUDE = "GIS Longitude"
     GIS_OBJECT_ID = "GIS Object ID"
+    DISMISS_STATUS = "Dismiss Status"
+    DISMISSED_CONDITION = "Dismissed Condition"
+    LATEST_COURT_NOTES = "Latest Court Notes"
 
 
 CLIO_GROUP_NAME = "NP Clinic"
 CLIO_PRACTICE_AREA = "Neighborhood Preservation Test"
 CLIO_CLIENT_NAME = "NP Clinic Client Test"
+CLIO_CALENDAR_NAME = "NP Clinic Test Calendar"
 CLIO_CUSTOM_FIELDS = [
     {
         "name": ClioCustomFieldNames.INCIDENT_NUMBER.value,
@@ -69,22 +89,37 @@ CLIO_CUSTOM_FIELDS = [
     },
     {
         "name": ClioCustomFieldNames.NPA_INSPECT_SUMMARY.value,
-        "field_type": "text_line",
+        "field_type": "text_area",
         "parent_type": "Matter",
     },
     {
         "name": ClioCustomFieldNames.COURT_STATUS.value,
-        "field_type": "text_line",
+        "field_type": "picklist",
         "parent_type": "Matter",
+        "picklist_options": [
+            {"option": "Demo"},
+            {"option": "Dev Plan"},
+            {"option": "Dismissed"},
+            {"option": "Hearing"},
+            {
+                "option": "Initial Setting",
+            },
+            {"option": "Initial Setting 2"},
+            {"option": "Initial Setting 3"},
+            {"option": "Initial Setting 4"},
+            {"option": "Non-Compliance"},
+            {"option": "Nuisance"},
+            {
+                "option": "Payment",
+            },
+            {"option": "Receiver"},
+            {"option": "Status"},
+            {"option": "Stay"},
+        ],
     },
     {
         "name": ClioCustomFieldNames.LOCATION.value,
         "field_type": "text_line",
-        "parent_type": "Matter",
-    },
-    {
-        "name": ClioCustomFieldNames.NEXT_COURT_DATE.value,
-        "field_type": "date",
         "parent_type": "Matter",
     },
     {
@@ -117,6 +152,40 @@ CLIO_CUSTOM_FIELDS = [
         "field_type": "numeric",
         "parent_type": "Matter",
     },
+    {
+        "name": ClioCustomFieldNames.DISMISS_STATUS.value,
+        "field_type": "text_line",
+        "parent_type": "Matter",
+    },
+    {
+        "name": ClioCustomFieldNames.DISMISSED_CONDITION.value,
+        "field_type": "picklist",
+        "parent_type": "Matter",
+        "picklist_options": [
+            {
+                "option": "Dismissed Rehab by Property Owner",
+            },
+            {
+                "option": "Dismissed Rehab by Property Receiver",
+            },
+            {
+                "option": "Dismissed Demolished by City",
+            },
+            {
+                "option": "Dismissed Demolished by Property Owner",
+            },
+            {
+                "option": "Dismissed Property Transferred",
+            },
+            {
+                "option": "Dismissed Property Owned by County Through Tax Sale",
+            },
+            {
+                "option": "Dismissed Refer to Condemnation",
+            },
+            {"option": "Other"},
+        ],
+    },
 ]
 
 CLIO_API_URL = "https://app.clio.com/api/v4/"
@@ -124,15 +193,15 @@ CLIO_AUTH_URL = "https://app.clio.com/oauth/authorize"
 CLIO_TOKEN_URL = "https://app.clio.com/oauth/token"
 
 CLIO_CALLBACK_URL = os.environ.get(
-    "CLIO_CALLBACK_URL", "https://cd8d7c188316.ngrok.io/callback"
+    "CLIO_CALLBACK_URL", "https://e95f61a94782.ngrok.io/callback"
 )
 
 CLIO_API_KEY = os.environ.get("CLIO_API_KEY")
 CLIO_API_SECRET = os.environ.get("CLIO_API_SECRET")
 
-GIS_HOST = "https://mapview.memphistn.gov"
+GIS_HOST = "https://mapviewtest.memphistn.gov"
 GIS_FEATURE_SERVER_PATH = (
     "arcgis/rest/services/AGO_Code/Code_Memphis_Fights_Blight/FeatureServer"
 )
 GIS_ACTIVE_LITIGATION_TABLE_ID = "2"
-GIS_LITIGATION_HISTORY_TABLE_ID = "7"
+GIS_LITIGATION_HISTORY_TABLE_ID = "6"

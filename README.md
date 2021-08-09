@@ -55,6 +55,7 @@ FLASK_APP=app
 1. Log in to [Clio developer hub](https://www.clio.com/partnerships/developers/), create application, and set app url and authorization callback url. Need read and write permissions for the following models:
 - Matters
 - Contacts
+- Calendars
 - Custom Fields
 - Documents
 - Users

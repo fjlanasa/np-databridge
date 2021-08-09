@@ -2,10 +2,16 @@ import os
 import datetime
 import json
 from dataclasses import dataclass, asdict
+from collections import defaultdict
 from typing import Dict, List, Optional, TypedDict
 
 import requests
-from utils.constants import BASE_DATA_DIR, ClioCustomFieldNames, GISFields
+from utils.constants import (
+    BASE_DATA_DIR,
+    ClioCustomFieldNames,
+    GISActiveLitigationsFields,
+    GISLitigationHistoryFields,
+)
 from utils.gis_client import GISClient
 from utils.clio_client import ClioApiClient, take_one
 from utils.logging import logger
@@ -18,7 +24,8 @@ retries = Retry(total=10, backoff_factor=1, status_forcelist=[429, 500, 502, 503
 s.mount("http://", HTTPAdapter(max_retries=retries))
 s.mount("https://", HTTPAdapter(max_retries=retries))
 
-DATE_FORMAT = '%Y-%m-%dT%H:%M:%S+00:00'
+DATE_FORMAT = "%Y-%m-%dT%H:%M:%S+00:00"
+
 
 @dataclass
 class GISIncident:
@@ -38,6 +45,8 @@ class GISIncident:
     civil_warrant: str
     latest_court_notes: str
     geometry: Dict[str, float]
+    dismiss_status: str = None
+    dismissed_condition: str = None
 
 
 @dataclass
@@ -59,10 +68,10 @@ class GISAttachment:
     name: str
 
 
-class ClioNote:
+class ClioCalendarEntry:
     id: str
     matter: dict
-    detail: str
+    name: str
 
     def __init__(self, id, matter, detail):
         self.id = id
@@ -73,8 +82,8 @@ class ClioNote:
         if self.matter:
             return {
                 "attributes": {
-                    GISFields.OBJECT_ID.value: self.matter.object_id,
-                    GISFields.LATEST_COURT_NOTES.value: self.detail,
+                    GISActiveLitigationsFields.OBJECT_ID.value: self.matter.object_id,
+                    GISActiveLitigationsFields.LATEST_COURT_NOTES.value: self.detail,
                 },
                 "geometry": {"x": self.matter.geo_x, "y": self.matter.geo_y},
             }
@@ -107,10 +116,29 @@ class ClioPracticeArea:
     name: str
 
 
-class ClioCustomField(TypedDict):
+@dataclass
+class ClioCalendar:
     id: str
-    etag: str
-    name: ClioCustomFieldNames
+    name: str = None
+
+
+class ClioCustomField:
+    def __init__(
+        self, id=None, etag=None, name=None, field_type=None, picklist_options=[]
+    ):
+        self.id = id
+        self.etag = etag
+        self.name = name
+        self.picklist_options = picklist_options
+
+    def get_option_id_by_name(self, name):
+        options = [
+            option for option in self.picklist_options if option["option"] == name
+        ]
+        if bool(options):
+            return options[0]["id"]
+        else:
+            return None
 
 
 class ClioCustomFields:
@@ -125,15 +153,20 @@ class ClioCustomFields:
 
     def get_field_id_by_name(self, field_name):
         field = self.fields_by_name.get(field_name)
-        return field["id"] if field else None
+        return field.id if field else None
 
     def get_field_name_by_id(self, field_id):
         field = self.fields_by_id.get(field_id)
-        return field["name"] if field else None
+        return field.name if field else None
+
+
+class ClioPickListOptions:
+    def __init__(self, data):
+        self.option_ids_by_name = {option["name"]: option["id"] for option in data}
 
 
 class ClioMatter:
-    def __init__(self, matter):
+    def __init__(self, matter, next_court_date=None, court_notes=None):
         self.id = matter["id"]
         self.input_doc = matter
         object_id = [
@@ -141,31 +174,71 @@ class ClioMatter:
             for value in matter["custom_field_values"]
             if value["field_name"] == ClioCustomFieldNames.GIS_OBJECT_ID.value
         ]
-        self.object_id = object_id[0]['value'] if object_id else None
-        geo_x = [
+        civil_warrant = [
             value
             for value in matter["custom_field_values"]
-            if value["field_name"] == ClioCustomFieldNames.LONGITUDE.value
+            if value["field_name"] == ClioCustomFieldNames.CIVIL_WARRANT.value
         ]
-        self.geo_x = geo_x[0]['value'] if geo_x else None
-        geo_y = [
+        self.civil_warrant = civil_warrant[0]["value"] if civil_warrant else None
+        parcel_id = [
             value
             for value in matter["custom_field_values"]
-            if value["field_name"] == ClioCustomFieldNames.LATITUDE.value
+            if value["field_name"] == ClioCustomFieldNames.PARCEL_ID.value
         ]
-        self.geo_y = geo_y[0]['value'] if geo_y else None
-        next_court_date = [
+        self.parcel_id = parcel_id[0]["value"] if parcel_id else None
+        incident_number = [
             value
             for value in matter["custom_field_values"]
-            if value["field_name"] == ClioCustomFieldNames.NEXT_COURT_DATE.value
+            if value["field_name"] == ClioCustomFieldNames.INCIDENT_NUMBER.value
         ]
-        self.next_court_date = next_court_date[0]['value'] if next_court_date else None
+        self.incident_number = incident_number[0]["value"] if incident_number else None
+        address = [
+            value
+            for value in matter["custom_field_values"]
+            if value["field_name"] == ClioCustomFieldNames.LOCATION.value
+        ]
+        self.address = address[0]["value"] if address else None
+        sub_district = [
+            value
+            for value in matter["custom_field_values"]
+            if value["field_name"] == ClioCustomFieldNames.SUB_DISTRICT.value
+        ]
+        self.sub_district = sub_district[0]["value"] if sub_district else None
+        self.object_id = object_id[0]["value"] if object_id else None
         court_status = [
             value
             for value in matter["custom_field_values"]
             if value["field_name"] == ClioCustomFieldNames.COURT_STATUS.value
         ]
-        self.court_status = court_status[0]['value'] if court_status else None
+        self.court_status = court_status[0]["value"] if court_status else None
+        dismiss_status = [
+            value
+            for value in matter["custom_field_values"]
+            if value["field_name"] == ClioCustomFieldNames.DISMISS_STATUS.value
+        ]
+        self.dismiss_status = dismiss_status[0]["value"] if dismiss_status else None
+        dismissed_condition = [
+            value
+            for value in matter["custom_field_values"]
+            if value["field_name"] == ClioCustomFieldNames.DISMISSED_CONDITION.value
+        ]
+        self.dismissed_condition = (
+            dismissed_condition[0]["value"] if dismissed_condition else None
+        )
+        geo_x = [
+            value
+            for value in matter["custom_field_values"]
+            if value["field_name"] == ClioCustomFieldNames.LONGITUDE.value
+        ]
+        self.geo_x = geo_x[0]["value"] if geo_x else None
+        geo_y = [
+            value
+            for value in matter["custom_field_values"]
+            if value["field_name"] == ClioCustomFieldNames.LATITUDE.value
+        ]
+        self.geo_y = geo_y[0]["value"] if geo_y else None
+        self.next_court_date = next_court_date
+        self.court_notes = court_notes
 
     def is_valid(self):
         return bool(self.object_id) and bool(self.geo_x) and bool(self.geo_y)
@@ -173,14 +246,23 @@ class ClioMatter:
     def to_gis_request_feature(self):
         return {
             "attributes": {
-                GISFields.OBJECT_ID.value: self.object_id,
-                GISFields.COURT_STATUS.value: self.court_status,
-                GISFields.NEXT_COURT_DATE.value: int(
+                GISLitigationHistoryFields.OBJECT_ID.value: self.object_id,
+                GISLitigationHistoryFields.CIVIL_WARRANT.value: self.civil_warrant,
+                GISLitigationHistoryFields.SUB_DISTRICT.value: int(
+                    self.sub_district.split("-")[0]
+                ),
+                GISLitigationHistoryFields.ADDRESS.value: self.address,
+                GISLitigationHistoryFields.PARCEL_ID.value: self.parcel_id,
+                GISLitigationHistoryFields.INCIDENT_NUMBER.value: self.incident_number,
+                GISLitigationHistoryFields.COURT_STATUS.value: self.court_status,
+                GISLitigationHistoryFields.NEXT_COURT_DATE.value: int(
                     datetime.datetime.fromisoformat(self.next_court_date).timestamp()
                     * 1e3
                 )
                 if self.next_court_date
                 else None,
+                GISLitigationHistoryFields.DISMISS_STATUS.value: self.dismiss_status,
+                GISLitigationHistoryFields.DISMISSED_CONDITION.value: self.dismissed_condition,
             },
             "geometry": {"x": self.geo_x, "y": self.geo_y},
         }
@@ -199,6 +281,7 @@ class DataBridge:
         client_file_name="client.json",
         custom_fields_file_name="custom_fields.json",
         practice_area_file_name="practice_area.json",
+        calendar_file_name="calendar.json",
         group_file_name="group.json",
         base_data_dir=BASE_DATA_DIR,
     ):
@@ -255,8 +338,6 @@ class DataBridge:
             self.clio_update_queue_path, "matters"
         )
         os.makedirs(self.clio_matters_update_path, exist_ok=True)
-        self.clio_notes_update_path = os.path.join(self.clio_update_queue_path, "notes")
-        os.makedirs(self.clio_notes_update_path, exist_ok=True)
         ## Files contain json with saved Clio resources (Client, Practice Area, Group, Custom Fields)
         ## Load Client
         self.client_path = os.path.join(clio_directory_path, client_file_name)
@@ -297,6 +378,12 @@ class DataBridge:
             if practice_area_asset
             else None
         )
+        ## Load Calendar
+        self.clio_calendar_path = os.path.join(clio_directory_path, calendar_file_name)
+        calendar_asset = self.load_entity(self.clio_calendar_path)
+        self.clio_calendar = (
+            ClioCalendar(id=calendar_asset["id"]) if calendar_asset else None
+        )
 
     def make_timestamp(self):
         return datetime.datetime.utcnow().strftime(DATE_FORMAT)
@@ -316,67 +403,153 @@ class DataBridge:
         except FileNotFoundError:
             return None
 
-    def pull_gis_updates(self, max_records=None):
-        now = self.make_timestamp()
-        logger.info(f"Fetching active litigations updated since {self.last_gis_pull}")
-        active_litigation_features = [
-            (x["geometry"], x["attributes"])
+    def fetch_gis_active_litigation_features(self, max_records=None):
+        return [
+            GISIncident(
+                object_id=x["attributes"].get(
+                    GISActiveLitigationsFields.OBJECT_ID.value
+                ),
+                updated=x["attributes"].get(
+                    GISActiveLitigationsFields.LAST_MODIFIED_DATE.value
+                ),
+                created=x["attributes"].get(
+                    GISActiveLitigationsFields.CREATION_DATE.value
+                ),
+                incident_number=x["attributes"].get(
+                    GISActiveLitigationsFields.INCIDENT_NUMBER.value
+                ),
+                parcel_id=x["attributes"].get(
+                    GISActiveLitigationsFields.PARCEL_ID.value
+                ),
+                city_file_no=x["attributes"].get(
+                    GISActiveLitigationsFields.CITY_FILE_NO.value
+                ),
+                sub_district=x["attributes"].get(
+                    GISActiveLitigationsFields.SUB_DISTRICT.value
+                ),
+                npa_inspect_summary=x["attributes"].get(
+                    GISActiveLitigationsFields.NPA_INSPECT_SUMMARY.value
+                ),
+                court_status=x["attributes"].get(
+                    GISActiveLitigationsFields.COURT_STATUS.value
+                ),
+                location=x["attributes"].get(GISActiveLitigationsFields.LOCATION.value),
+                next_court_date=x["attributes"].get(
+                    GISActiveLitigationsFields.NEXT_COURT_DATE.value
+                ),
+                property_owner=x["attributes"].get(
+                    GISActiveLitigationsFields.PROPERTY_OWNER.value
+                ),
+                defendent=x["attributes"].get(
+                    GISActiveLitigationsFields.DEFENDENT.value
+                ),
+                civil_warrant=x["attributes"].get(
+                    GISActiveLitigationsFields.CIVIL_WARRANT.value
+                ),
+                latest_court_notes=x["attributes"].get(
+                    GISActiveLitigationsFields.LATEST_COURT_NOTES.value
+                ),
+                geometry=x["geometry"],
+            )
             for x in self.gis_client.get_active_litigations(
                 query_start_datetime=self.last_gis_pull
-            )[0:max_records]
+            )["features"][0:max_records]
         ]
-        logger.info(
-            f"Fetched {len(active_litigation_features)} active litigation features"
-        )
+
+    def log_gis_active_litigation_features(
+        self, timestamp, active_litigation_features: List[GISIncident]
+    ):
         if bool(active_litigation_features):
             active_litigation_f = open(
-                os.path.join(self.gis_active_litigation_update_path, now), "w"
+                os.path.join(self.gis_active_litigation_update_path, timestamp), "w"
             )
-            for geo, attrs in active_litigation_features:
-                incident = GISIncident(
-                    object_id=attrs.get(GISFields.OBJECT_ID.value),
-                    updated=attrs.get(GISFields.LAST_MODIFIED_DATE.value),
-                    created=attrs.get(GISFields.CREATION_DATE.value),
-                    incident_number=attrs.get(GISFields.INCIDENT_NUMBER.value),
-                    parcel_id=attrs.get(GISFields.PARCEL_ID.value),
-                    city_file_no=attrs.get(GISFields.CITY_FILE_NO.value),
-                    sub_district=attrs.get(GISFields.SUB_DISTRICT.value),
-                    npa_inspect_summary=attrs.get(GISFields.NPA_INSPECT_SUMMARY.value),
-                    court_status=attrs.get(GISFields.COURT_STATUS.value),
-                    location=attrs.get(GISFields.LOCATION.value),
-                    next_court_date=attrs.get(GISFields.NEXT_COURT_DATE.value),
-                    property_owner=attrs.get(GISFields.PROPERTY_OWNER.value),
-                    defendent=attrs.get(GISFields.DEFENDENT.value),
-                    civil_warrant=attrs.get(GISFields.CIVIL_WARRANT.value),
-                    latest_court_notes=attrs.get(GISFields.LATEST_COURT_NOTES.value),
-                    geometry=geo,
-                )
+            for incident in active_litigation_features:
                 logger.info(f"Logging update to litigation {incident}")
                 active_litigation_f.write(json.dumps(asdict(incident)))
                 active_litigation_f.write("\n")
             active_litigation_f.close()
 
-            attachments_file = open(
-                os.path.join(self.gis_ligation_attachments_update_path, now), "w"
+    def fetch_active_litigation_features_attachments(
+        self, active_litigation_features: List[GISIncident]
+    ) -> List[GISAttachment]:
+        attachments = []
+        for incident in active_litigation_features:
+            object_id = incident.object_id
+            attachment_infos = self.gis_client.get_attachments(object_id)
+            for attachment in attachment_infos:
+                obj = GISAttachment(
+                    litigation_object_id=object_id,
+                    civil_warrant=incident.civil_warrant,
+                    id=attachment["id"],
+                    content_type=attachment["contentType"],
+                    size=attachment["size"],
+                    name=attachment["name"],
+                )
+                attachments.append(obj)
+        return attachments
+
+    def log_gis_attachments(self, timestamp, attachments: List[GISAttachment]):
+        attachments_file = open(
+            os.path.join(self.gis_ligation_attachments_update_path, timestamp), "w"
+        )
+        for obj in attachments:
+            logger.info(
+                f"Logging attachment for civil warrant number {obj.civil_warrant}: {obj}"
             )
-            for _, litigation in active_litigation_features:
-                object_id = litigation[GISFields.OBJECT_ID.value]
-                attachment_infos = self.gis_client.get_attachments(object_id)
-                for attachment in attachment_infos:
-                    obj = GISAttachment(
-                        litigation_object_id=object_id,
-                        civil_warrant=litigation[GISFields.CIVIL_WARRANT.value],
-                        id=attachment["id"],
-                        content_type=attachment["contentType"],
-                        size=attachment["size"],
-                        name=attachment["name"],
-                    )
-                    logger.info(
-                        f"Logging attachment for civil warrant number {litigation.get(GISFields.CIVIL_WARRANT.value)}: {obj}"
-                    )
-                    attachments_file.write(json.dumps(asdict(obj)))
-                    attachments_file.write("\n")
-            attachments_file.close()
+            attachments_file.write(json.dumps(asdict(obj)))
+            attachments_file.write("\n")
+        attachments_file.close()
+
+    def gis_to_clio_migration(self, max_records=None):
+        now = self.make_timestamp()
+        logger.info(f"Fetching active litigations updated since {self.last_gis_pull}")
+        active_litigation_features = self.fetch_gis_active_litigation_features(
+            max_records
+        )
+        logger.info(
+            f"Fetched {len(active_litigation_features)} active litigation features"
+        )
+        dismissed_statuses = self.gis_client.get_dismissed_statuses()["features"]
+        last_dismissed_statuses_by_civil_warrant_number = {
+            status["attributes"][
+                GISLitigationHistoryFields.CIVIL_WARRANT.value
+            ]: status["attributes"]
+            for status in dismissed_statuses
+        }
+        for feature in active_litigation_features:
+            feature.dismiss_status = (
+                last_dismissed_statuses_by_civil_warrant_number.get(
+                    feature.civil_warrant, {}
+                ).get(GISLitigationHistoryFields.DISMISS_STATUS.value)
+            )
+            feature.dismissed_condition = (
+                last_dismissed_statuses_by_civil_warrant_number.get(
+                    feature.civil_warrant, {}
+                ).get(GISLitigationHistoryFields.DISMISSED_CONDITION.value)
+            )
+        self.log_gis_active_litigation_features(now, active_litigation_features)
+        attachments = self.fetch_active_litigation_features_attachments(
+            active_litigation_features
+        )
+        self.log_gis_attachments(now, attachments)
+
+        with open(self.gis_update_log_path, "w") as f:
+            f.write(now)
+
+    def pull_gis_updates(self, max_records=None):
+        now = self.make_timestamp()
+        logger.info(f"Fetching active litigations updated since {self.last_gis_pull}")
+        active_litigation_features = self.fetch_gis_active_litigation_features(
+            max_records
+        )
+        logger.info(
+            f"Fetched {len(active_litigation_features)} active litigation features"
+        )
+        self.log_gis_active_litigation_features(now, active_litigation_features)
+        attachments = self.fetch_active_litigation_features_attachments(
+            active_litigation_features
+        )
+        self.log_gis_attachments(now, attachments)
 
         with open(self.gis_update_log_path, "w") as f:
             f.write(now)
@@ -413,11 +586,17 @@ class DataBridge:
                 practice_area_id=self.practice_area.id,
                 custom_field_values=self.create_custom_field_values_payload(incident),
             )
-            if res.status_code == 201 and migrate and incident.latest_court_notes:
-                logger.info(f"creating notes {incident.latest_court_notes}")
-                matter = res.json()["data"]
-                res = self.clio_api_client.create_note(
-                    matter_id=matter["id"], detail=incident.latest_court_notes
+
+            if migrate and incident.next_court_date:
+                matter_id = res.json()["data"]["id"]
+                date_str = self.timestamp_to_datetime_str(incident.next_court_date)
+                res = self.clio_api_client.create_calendar_entry(
+                    name=incident.defendent,
+                    description=incident.latest_court_notes,
+                    start=date_str,
+                    end=date_str,
+                    calendar_id=self.clio_calendar.id,
+                    matter_id=matter_id,
                 )
             return res
 
@@ -470,10 +649,13 @@ class DataBridge:
                 while litigation_json:
                     litigation = GISIncident(**json.loads(litigation_json))
                     logger.info(f"uploading matter {litigation}")
+                    res = None
                     try:
                         res = self.create_or_update_matter(litigation, migrate)
+
                         res.raise_for_status()
-                    except:
+                    except Exception as e:
+
                         logger.warning(f"Failed to process matter update {litigation}")
                         logger.warning(res.content)
                         failures.append(litigation)
@@ -523,9 +705,11 @@ class DataBridge:
             else:
                 os.remove(file_path)
 
-    def get_all_matters(self):
+    def get_all_matters(self, ids=None, updated_since=None):
         matters = []
-        res = self.clio_api_client.get_matters(self.group.id)
+        res = self.clio_api_client.get_matters(
+            self.group.id, self.practice_area.id, ids=ids, updated_since=updated_since
+        )
         if res.status_code == 200:
             body = res.json()
             matters += body["data"]
@@ -542,43 +726,59 @@ class DataBridge:
         logger.info(f"Pulling Clio updates at {now}")
         logger.info(f"Last Clio pull was {self.last_clio_pull}")
         logger.info("Fetching all Clio matters")
-        matters = self.get_all_matters()[0:max_records]
-        logger.debug(f"Fetched {len(matters)} matters")
-        last_clio_pull_date = datetime.datetime.fromisoformat(self.last_clio_pull) if self.last_clio_pull else None
-        matters_to_update = (
-            matters
-            if not last_clio_pull_date
-            else [
-                matter
-                for matter in matters
-                if datetime.datetime.fromisoformat(matter["updated_at"]) > last_clio_pull_date
-            ]
+        last_clio_pull_date = self.last_clio_pull
+        recently_updated_matters = self.get_all_matters(
+            updated_since=last_clio_pull_date
+        )[0:max_records]
+        ce_res = self.clio_api_client.get_calendar_entries(
+            self.clio_calendar.id, last_clio_pull_date, now
         )
-        if bool(matters_to_update):
-            matter_f = open(os.path.join(self.clio_matters_update_path, now), "w")
-            for matter in matters_to_update:
-                logger.info(f"Logging Clio matter update {matter}")
-                matter_f.write(json.dumps(matter))
-                matter_f.write("\n")
-            matter_f.close()
-        notes_to_update = []
-        for matter in matters:
-            notes_res = self.clio_api_client.get_notes(
-                matter_id=matter["id"], updated_since=self.last_clio_pull
+        calendar_entries = sorted(
+            [ce for ce in ce_res.json()["data"] if ce["matter"]],
+            key=lambda x: x["start_at"],
+            reverse=True,
+        )
+        matters_by_id = {}
+        if calendar_entries:
+            next_calendar_entries_by_matter_id = {
+                ce["matter"]["id"]: ce for ce in calendar_entries
+            }
+            calendar_entry_matters = self.get_all_matters(
+                ids=next_calendar_entries_by_matter_id.keys()
             )
-            if notes_res.status_code == 200:
-                notes = notes_res.json()["data"]
-                notes_to_update += notes
-        if len(notes_to_update):
-            notes_f = open(os.path.join(self.clio_notes_update_path, now), "w")
-            for note in notes_to_update:
-                note = ClioNote(
-                    id=note["id"], detail=note["detail"], matter=matter
+        else:
+            next_calendar_entries_by_matter_id = {}
+            calendar_entry_matters = []
+        matters_by_id = {
+            matter["id"]: matter
+            for matter in recently_updated_matters + calendar_entry_matters
+        }
+        logger.debug(f"Fetched {len(matters_by_id)} matters")
+        if bool(matters_by_id):
+            matter_f = open(os.path.join(self.clio_matters_update_path, now), "w")
+            for id, matter in matters_by_id.items():
+                calendar_entry = next_calendar_entries_by_matter_id.get(id, {})
+                matter = ClioMatter(
+                    matter,
+                    calendar_entry.get("start_at"),
+                    calendar_entry.get("description"),
                 )
-                logger.info(f"Logging note update for {note}")
-                notes_f.write(json.dumps(note.__dict__()))
-                notes_f.write("\n")
-            notes_f.close()
+                if (
+                    matter.court_status
+                    == self.custom_fields.fields_by_name[
+                        ClioCustomFieldNames.COURT_STATUS.value
+                    ].get_option_id_by_name("Dismissed")
+                    or matter.next_court_date
+                ):
+                    logger.info(f"Logging Clio matter update {matter.input_doc}")
+                    log = {
+                        "matter": matter.input_doc,
+                        "next_court_date": matter.next_court_date,
+                        "court_notes": matter.court_notes,
+                    }
+                    matter_f.write(json.dumps(log))
+                    matter_f.write("\n")
+            matter_f.close()
         with open(self.clio_update_log_path, "w") as f:
             f.write(now)
 
@@ -589,40 +789,47 @@ class DataBridge:
             matters_to_process_by_id: Dict[str, ClioMatter] = {}
             matter_id_by_gis_object_id: Dict[str, str] = {}
             failures = []
+            matters_to_process = []
             with open(file_path, "r") as f:
                 matter_json = f.readline()
                 while matter_json:
-                    matter = ClioMatter(matter=json.loads(matter_json))
-                    if matter.is_valid():
-                        matters_to_process_by_id[matter.id] = matter
-                        matter_id_by_gis_object_id[matter.object_id] = matter.id
-                    else:
-                        logger.warning(
-                            f"Matter did not have sufficient info to update, {matter}"
-                        )
-                        failures.append(matter.input_doc)
-
+                    details = json.loads(matter_json)
+                    matter = ClioMatter(
+                        matter=details["matter"],
+                        next_court_date=details["next_court_date"],
+                        court_notes=details["court_notes"],
+                    )
+                    matters_to_process.append(matter)
                     matter_json = f.readline()
-            features = [
-                matter.to_gis_request_feature()
-                for matter in matters_to_process_by_id.values()
-            ]
-            res = self.gis_client.update_features(features)
+            res = self.gis_client.add_litigation_history(
+                [matter.to_gis_request_feature() for matter in matters_to_process]
+            )
             if res.status_code == 200:
-                update_results = res.json()["updateResults"]
-                for result in update_results:
-                    matter = matters_to_process_by_id[
-                        matter_id_by_gis_object_id[result["objectId"]]
-                    ]
+                update_results = res.json()["addResults"]
+                for i, result in enumerate(update_results):
+                    matter = matters_to_process[i]
                     if result["success"]:
                         logger.info(
                             f"Successfully pushed matter updates to GIS {matter}"
                         )
                     else:
                         logger.warning(f"Failed to push matter updates to GIS {matter}")
-                        failures.append(matter)
+                        failures.append(
+                            {
+                                "matter": matter.input_doc,
+                                "next_court_date": matter.next_court_date,
+                                "court_notes": matter.court_notes,
+                            }
+                        )
             else:
-                failures = [matter.input_doc in matters_to_process_by_id.values()]
+                failures = [
+                    {
+                        "matter": matter.input_doc,
+                        "next_court_date": matter.next_court_date,
+                        "court_notes": matter.court_notes,
+                    }
+                    for matter in matters_to_process
+                ]
             if failures:
                 update_file = open(file_path, "w")
                 for failure in failure:
@@ -632,63 +839,8 @@ class DataBridge:
             else:
                 os.remove(file_path)
 
-    def process_clio_notes(self):
-        notes_update_files = sorted(os.listdir(self.clio_notes_update_path))
-        for _file in notes_update_files:
-            file_path = os.path.join(self.clio_notes_update_path, _file)
-            failures = []
-            notes_to_process: List[ClioNote] = []
-            with open(file_path, "r") as f:
-                notes_json = f.readline()
-                while notes_json:
-                    note_doc = json.loads(notes_json)
-                    note = ClioNote(
-                        id=note_doc["id"],
-                        detail=note_doc["detail"],
-                        matter=note_doc["matter"],
-                    )
-                    matter = note.matter
-                    if matter.is_valid():
-                        notes_to_process.append(note)
-                    else:
-                        logger.warning(
-                            f"Matter did not have sufficient info to update note, matter: {matter}, note: {note}"
-                        )
-                        failures.append(note)
-                    notes_json = f.readline()
-
-            features = [note.to_gis_request_feature() for note in notes_to_process if note.matter]
-            res = self.gis_client.update_features(features)
-            if res.status_code == 200 and res.json().get("updateResults"):
-                update_results = res.json()["updateResults"]
-                for result in update_results:
-                    object_id = result["objectId"]
-                    if result["success"]:
-                        logger.info(
-                            f"Successfully pushed notes updates to GIS feature {object_id}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Failed to push notes updates to GIS feature {object_id}"
-                        )
-                        notes = [
-                            note
-                            for note in notes_to_process
-                            if note.matter and note.matter.object_id == object_id
-                        ]
-                        failures.append(notes)
-            if failures:
-                update_file = open(file_path, "w")
-                for failure in failure:
-                    update_file.write(json.dumps(failure.__dict__))
-                    update_file.write("\n")
-                update_file.close()
-            else:
-                os.remove(file_path)
-
     def push_clio_updates(self):
         self.process_clio_matters()
-        self.process_clio_notes()
 
     def timestamp_to_datetime_str(self, timestamp):
         return datetime.datetime.fromtimestamp(timestamp / 1e3).isoformat()
@@ -757,17 +909,9 @@ class DataBridge:
                         ClioCustomFieldNames.COURT_STATUS.value
                     )
                 },
-                "value": incident.court_status,
-            },
-            {
-                "custom_field": {
-                    "id": self.custom_fields.get_field_id_by_name(
-                        ClioCustomFieldNames.NEXT_COURT_DATE.value
-                    )
-                },
-                "value": self.timestamp_to_datetime_str(incident.next_court_date)
-                if incident.next_court_date
-                else None,
+                "value": self.custom_fields.fields_by_name[
+                    ClioCustomFieldNames.COURT_STATUS.value
+                ].get_option_id_by_name(incident.court_status),
             },
             {
                 "custom_field": {
@@ -808,6 +952,22 @@ class DataBridge:
                     )
                 },
                 "value": incident.object_id,
+            },
+            {
+                "custom_field": {
+                    "id": self.custom_fields.get_field_id_by_name(
+                        ClioCustomFieldNames.DISMISS_STATUS.value
+                    ),
+                    "value": incident.dismiss_status,
+                }
+            },
+            {
+                "custom_field": {
+                    "id": self.custom_fields.get_field_id_by_name(
+                        ClioCustomFieldNames.DISMISSED_CONDITION.value
+                    ),
+                    "value": incident.dismissed_condition,
+                }
             },
         ]
 
